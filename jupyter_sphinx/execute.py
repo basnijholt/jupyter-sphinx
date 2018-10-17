@@ -228,6 +228,12 @@ def cell_output_to_nodes(cell, data_priority, dir):
                     rawsource=data,
                     language='ipython',
                 ))
+            elif 'javascipt' in mime_type or 'json' in mime_type:
+                to_add.append(docutils.nodes.raw(
+                    text='<script type="{mime_type}">{data}</script>'
+                         .format(mime_type=mime_type, data=json.dumps(data)),
+                    format='html',
+                ))
 
     return to_add
 
@@ -380,6 +386,7 @@ def setup(app):
     app.add_config_value(
         'jupyter_execute_data_priority',
         [
+            'application/vnd.jupyter.widget-view+json',
             'text/html',
             'image/svg+xml',
             'image/png',
