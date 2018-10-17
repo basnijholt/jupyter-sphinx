@@ -3,6 +3,8 @@
 import os
 from itertools import groupby, count
 from operator import itemgetter
+import json
+from ast import literal_eval
 
 from sphinx.util import logging
 from sphinx.transforms import SphinxTransform
@@ -15,7 +17,7 @@ from IPython.lib.lexers import IPythonTracebackLexer, IPython3Lexer
 from docutils.parsers.rst import Directive, directives
 
 import nbconvert
-from nbconvert.preprocessors.execute import executenb
+from nbconvert.preprocessors.execute import ExecutePreprocessor
 from nbconvert.preprocessors import ExtractOutputPreprocessor
 from nbconvert.writers import FilesWriter
 
@@ -41,6 +43,38 @@ def blank_nb(kernel_name):
             'name': kernel_name,
         }
     })
+
+
+def extract_widget_state(executor):
+    """Extract ipywidget state from a running ExecutePreprocessor"""
+    # Can only run this function inside 'setup_preprocessor'
+    assert hasattr(executor, 'kc')
+    get_widget = 'import ipywidgets; ipywidgets.Widget.get_manager_state()'
+    cell = nbformat.v4.new_code_cell(get_widget)
+    _, (output,) = executor.run_cell(cell)
+    widget_state = literal_eval(output['data']['text/plain'])
+    if widget_state['state']:
+        return widget_state
+    else:
+        return None
+
+
+def executenb_with_widgets(nb, cwd=None, km=None, **kwargs):
+    """Execute a notebook and return the state of all ipywidgets.
+
+    Vendored from 'nbconvert.preprocessors.executenb' with modifications
+    to extract widget state from the kernel after execution.
+    """
+    resources = {}
+    if cwd is not None:
+        resources['metadata'] = {'path': cwd}
+    ep = ExecutePreprocessor(**kwargs)
+    with ep.setup_preprocessor(nb, resources, km=km):
+        ep.log.info("Executing notebook with kernel: %s" % ep.kernel_name)
+        nb, resources = super(ExecutePreprocessor, ep).preprocess(nb, resources)
+        info_msg = ep._wait_for_reply(ep.kc.kernel_info())
+        nb.metadata['language_info'] = info_msg['content']['language_info']
+        return extract_widget_state(ep)
 
 
 def split_on(pred, it):
@@ -256,16 +290,19 @@ def default_notebook_names(basename):
 
 
 def execute_cells(kernel_name, cells, execute_kwargs):
-    """Execute Jupyter cells in the specified kernel and return the notebook."""
+    """Execute Jupyter cells in the specified kernel.
+
+    Returns the notebook and any ipywidget state.
+    """
     notebook = blank_nb(kernel_name)
     notebook.cells = cells
     # Modifies 'notebook' in-place
     try:
-        executenb(notebook, **execute_kwargs)
+        widget_state = executenb_with_widgets(notebook, **execute_kwargs)
     except Exception as e:
         raise ExtensionError('Notebook execution failed', orig_exc=e)
 
-    return notebook
+    return notebook, widget_state
 
 
 def write_notebook_output(notebook, output_dir, notebook_name):
@@ -352,11 +389,24 @@ class ExecuteJupyterCells(SphinxTransform):
                 kernel_name = default_kernel
                 file_name = next(default_names)
 
-            notebook = execute_cells(
+            notebook, widget_state = execute_cells(
                 kernel_name,
                 [nbformat.v4.new_code_cell(node.astext()) for node in nodes],
                 self.config.jupyter_execute_kwargs,
             )
+
+            if widget_state:
+                # Append widget state JSON if any widgets were used in the notebook.
+                # XXX: Can we specify a javascript node directly, rather than a 'raw'
+                #      node of 'html' format?
+                doctree.append(docutils.nodes.raw(
+                    text=''.join((
+                        '<script type="application/vnd.jupyter.widget-state+json">',
+                        json.dumps(widget_state),
+                        '</script>')),
+                    format='html'
+                ))
+
             # Modifies 'notebook' in-place, adding metadata specifying the
             # filenames of the saved outputs.
             write_notebook_output(notebook, output_dir, file_name)
