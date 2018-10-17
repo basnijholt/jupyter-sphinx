@@ -1,7 +1,9 @@
 """Simple sphinx extension that executes code in jupyter and inserts output."""
 
+from ast import literal_eval
 import os
 from itertools import groupby, count
+import json
 from operator import itemgetter
 
 from sphinx.util import logging
@@ -16,7 +18,7 @@ from docutils.parsers.rst.directives import flag, unchanged
 from docutils.parsers.rst import Directive
 
 import nbconvert
-from nbconvert.preprocessors.execute import executenb
+from nbconvert.preprocessors.execute import ExecutePreprocessor
 from nbconvert.preprocessors import ExtractOutputPreprocessor
 from nbconvert.writers import FilesWriter
 
@@ -183,6 +185,12 @@ def cell_output_to_nodes(cell, data_priority, dir):
                     text=data,
                     format='html'
                 ))
+            elif mime_type.startswith('application'):
+                data = json.dumps(data)
+                to_add.append(nodes.raw(
+                    text=f'<script type="{mime_type}">{data}</script>',
+                    format='html',
+                ))
             elif mime_type == 'text/latex':
                 to_add.append(displaymath(
                     latex=data,
@@ -216,17 +224,39 @@ def default_notebook_names(basename):
         yield '_'.join((basename, str(i)))
 
 
+def executenb(nb, cwd=None, km=None, **kwargs):
+    """Execute a notebook's code, updating outputs within the notebook object.
+
+    Modified from `nbconvert.preprocessors.execute` such that it returns the
+    widget's state.
+    """
+    resources = {}
+    if cwd is not None:
+        resources['metadata'] = {'path': cwd}
+    ep = ExecutePreprocessor(**kwargs)
+    with ep.setup_preprocessor(nb, resources, km=km):
+        ep.log.info("Executing notebook with kernel: %s" % ep.kernel_name)
+        nb, resources = super(ExecutePreprocessor, ep).preprocess(nb, resources)
+        info_msg = ep._wait_for_reply(ep.kc.kernel_info())
+        nb.metadata['language_info'] = info_msg['content']['language_info']
+        get_widget = 'import ipywidgets; ipywidgets.Widget.get_manager_state()'
+        cell = nbformat.v4.new_code_cell(get_widget)
+        _, outs = ep.run_cell(cell)
+        widget_state = outs[0]['data']['text/plain']
+    return widget_state
+
+
 def execute_cells(kernel_name, cells, execute_kwargs):
     """Execute Jupyter cells in the specified kernel and return the notebook."""
     notebook = blank_nb(kernel_name)
     notebook.cells = cells
     # Modifies 'notebook' in-place
     try:
-        executenb(notebook, **execute_kwargs)
+        widget_state = executenb(notebook, **execute_kwargs)
     except Exception as e:
         raise ExtensionError('Notebook execution failed', orig_exc=e)
 
-    return notebook
+    return notebook, widget_state
 
 
 def write_notebook_output(notebook, output_dir, notebook_name):
@@ -304,21 +334,28 @@ class ExecuteJupyterCells(SphinxTransform):
             doctree.traverse(Cell)
         )
 
-        for nodes in nodes_by_notebook:
-            kernel_name = nodes[0]['kernel_name'] or default_kernel
-            notebook_name = nodes[0]['notebook_name'] or next(default_names)
+        for _nodes in nodes_by_notebook:
+            kernel_name = _nodes[0]['kernel_name'] or default_kernel
+            notebook_name = _nodes[0]['notebook_name'] or next(default_names)
 
-            notebook = execute_cells(
+            notebook, widget_state = execute_cells(
                 kernel_name,
-                [nbformat.v4.new_code_cell(node.astext()) for node in nodes],
+                [nbformat.v4.new_code_cell(node.astext()) for node in _nodes],
                 self.config.jupyter_execute_kwargs,
             )
+            widget_state = json.dumps(literal_eval(widget_state))
+            widget_mime_type = "application/vnd.jupyter.widget-state+json"
+            doctree += nodes.raw(
+                text=f'<script type="{widget_mime_type}">{widget_state}</script>',
+                format='html'
+            )
+
             # Modifies 'notebook' in-place, adding metadata specifying the
             # filenames of the saved outputs.
             write_notebook_output(notebook, output_dir, notebook_name)
             # Add doctree nodes for cell output; images reference the filenames
             # we just wrote to; sphinx copies these when writing outputs.
-            for node, cell in zip(nodes, notebook.cells):
+            for node, cell in zip(_nodes, notebook.cells):
                 output_nodes = cell_output_to_nodes(
                     cell,
                     self.config.jupyter_execute_data_priority,
@@ -342,6 +379,8 @@ def setup(app):
     app.add_config_value(
         'jupyter_execute_data_priority',
         [
+            'application/vnd.jupyter.widget-view+json',
+            'application/javascript',
             'text/html',
             'image/svg+xml',
             'image/png',
