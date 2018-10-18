@@ -30,6 +30,9 @@ from ._version import __version__
 
 logger = logging.getLogger(__name__)
 
+WIDGET_VIEW_MIMETYPE = 'application/vnd.jupyter.widget-view+json'
+WIDGET_STATE_MIMETYPE = 'application/vnd.jupyter.widget-state+json'
+
 
 def blank_nb(kernel_name):
     try:
@@ -280,7 +283,7 @@ def cell_output_to_nodes(cell, data_priority, dir):
                     rawsource=data,
                     language='ipython',
                 ))
-            elif mime_type == 'application/vnd.jupyter.widget-view+json':
+            elif mime_type == WIDGET_VIEW_MIMETYPE:
                 to_add.append(docutils.nodes.raw(
                     text='<script type="{mime_type}">{data}</script>'
                          .format(mime_type=mime_type, data=json.dumps(data)),
@@ -419,7 +422,7 @@ class ExecuteJupyterCells(SphinxTransform):
                 #      node of 'html' format?
                 doctree.append(docutils.nodes.raw(
                     text=''.join((
-                        '<script type="application/vnd.jupyter.widget-state+json">',
+                        '<script type="{}">'.format(WIDGET_STATE_MIMETYPE),
                         json.dumps(widget_state),
                         '</script>')),
                     format='html'
@@ -454,7 +457,7 @@ def setup(app):
     app.add_config_value(
         'jupyter_execute_data_priority',
         [
-            'application/vnd.jupyter.widget-view+json',
+            WIDGET_VIEW_MIMETYPE,
             'text/html',
             'image/svg+xml',
             'image/png',
