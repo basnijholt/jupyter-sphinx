@@ -262,7 +262,7 @@ def cell_output_to_nodes(cell, data_priority, dir):
                     rawsource=data,
                     language='ipython',
                 ))
-            elif 'javascipt' in mime_type or 'json' in mime_type:
+            elif mime_type == 'application/vnd.jupyter.widget-view+json':
                 to_add.append(docutils.nodes.raw(
                     text='<script type="{mime_type}">{data}</script>'
                          .format(mime_type=mime_type, data=json.dumps(data)),
