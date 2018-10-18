@@ -67,11 +67,7 @@ def extract_widget_state(executor):
     '''
     cell = nbformat.v4.new_code_cell(get_widget)
     _, (output,) = executor.run_cell(cell)
-    widget_state = literal_eval(output['data']['text/plain'])
-    if widget_state is None or not widget_state['state']:
-        return None
-    else:
-        return widget_state
+    return literal_eval(output['data']['text/plain'])
 
 
 def language_info(executor):
@@ -81,12 +77,13 @@ def language_info(executor):
     return info_msg['content']['language_info']
 
 
-def executenb_with_widgets(nb, cwd=None, km=None, **kwargs):
-    """Execute a notebook and return the state of all ipywidgets.
-
-    Vendored from 'nbconvert.preprocessors.executenb' with modifications
-    to extract widget state from the kernel after execution.
-    """
+# Vendored from 'nbconvert.preprocessors.executenb' with modifications
+# to extract widget state from the kernel after execution and store it
+# in the notebook metadata.
+# TODO: Remove this once  https://github.com/jupyter/nbconvert/pull/900
+#       is merged and a new version of nbconvert is released.
+def executenb(nb, cwd=None, km=None, **kwargs):
+    """Execute a notebook and embed widget state."""
     resources = {}
     if cwd is not None:
         resources['metadata'] = {'path': cwd}
@@ -94,8 +91,10 @@ def executenb_with_widgets(nb, cwd=None, km=None, **kwargs):
     with ep.setup_preprocessor(nb, resources, km=km):
         ep.log.info("Executing notebook with kernel: %s" % ep.kernel_name)
         nb, resources = super(ExecutePreprocessor, ep).preprocess(nb, resources)
-        nb.metadata['language_info'] = language_info(ep)
-        return extract_widget_state(ep)
+        nb.metadata.language_info = language_info(ep)
+        widgets = extract_widget_state(ep)
+        if widgets:
+            nb.metadata.widgets = {WIDGET_STATE_MIMETYPE: widgets}
 
 
 def split_on(pred, it):
@@ -311,19 +310,16 @@ def default_notebook_names(basename):
 
 
 def execute_cells(kernel_name, cells, execute_kwargs):
-    """Execute Jupyter cells in the specified kernel.
-
-    Returns the notebook and any ipywidget state.
-    """
+    """Execute Jupyter cells in the specified kernel."""
     notebook = blank_nb(kernel_name)
     notebook.cells = cells
     # Modifies 'notebook' in-place
     try:
-        widget_state = executenb_with_widgets(notebook, **execute_kwargs)
+        executenb(notebook, **execute_kwargs)
     except Exception as e:
         raise ExtensionError('Notebook execution failed', orig_exc=e)
 
-    return notebook, widget_state
+    return notebook
 
 
 def write_notebook_output(notebook, output_dir, notebook_name):
@@ -410,13 +406,14 @@ class ExecuteJupyterCells(SphinxTransform):
                 kernel_name = default_kernel
                 file_name = next(default_names)
 
-            notebook, widget_state = execute_cells(
+            notebook = execute_cells(
                 kernel_name,
                 [nbformat.v4.new_code_cell(node.astext()) for node in nodes],
                 self.config.jupyter_execute_kwargs,
             )
 
-            if widget_state:
+            if 'widgets' in notebook.metadata:
+                widget_state = notebook.metadata.widgets[WIDGET_STATE_MIMETYPE]
                 # Append widget state JSON if any widgets were used in the notebook.
                 # XXX: Can we specify a javascript node directly, rather than a 'raw'
                 #      node of 'html' format?
