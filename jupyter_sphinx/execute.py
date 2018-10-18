@@ -49,14 +49,33 @@ def extract_widget_state(executor):
     """Extract ipywidget state from a running ExecutePreprocessor"""
     # Can only run this function inside 'setup_preprocessor'
     assert hasattr(executor, 'kc')
-    get_widget = 'import ipywidgets; ipywidgets.Widget.get_manager_state()'
+    # Only Python has kernel-side support for jupyter widgets currently
+    if language_info(executor)['name'] != 'python':
+        return None
+
+    get_widget = '''\
+        state = None
+        try:
+            import ipywidgets
+            state = ipywidgets.Widget.get_manager_state()
+        except Exception:  # Widgets are not installed in the kernel env
+            pass
+        state
+    '''
     cell = nbformat.v4.new_code_cell(get_widget)
     _, (output,) = executor.run_cell(cell)
     widget_state = literal_eval(output['data']['text/plain'])
-    if widget_state['state']:
-        return widget_state
-    else:
+    if widget_state is None or not widget_state['state']:
         return None
+    else:
+        return widget_state
+
+
+def language_info(executor):
+    # Can only run this function inside 'setup_preprocessor'
+    assert hasattr(executor, 'kc')
+    info_msg = executor._wait_for_reply(executor.kc.kernel_info())
+    return info_msg['content']['language_info']
 
 
 def executenb_with_widgets(nb, cwd=None, km=None, **kwargs):
@@ -72,8 +91,7 @@ def executenb_with_widgets(nb, cwd=None, km=None, **kwargs):
     with ep.setup_preprocessor(nb, resources, km=km):
         ep.log.info("Executing notebook with kernel: %s" % ep.kernel_name)
         nb, resources = super(ExecutePreprocessor, ep).preprocess(nb, resources)
-        info_msg = ep._wait_for_reply(ep.kc.kernel_info())
-        nb.metadata['language_info'] = info_msg['content']['language_info']
+        nb.metadata['language_info'] = language_info(ep)
         return extract_widget_state(ep)
 
 
