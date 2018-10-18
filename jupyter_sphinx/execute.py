@@ -48,6 +48,20 @@ def blank_nb(kernel_name):
     })
 
 
+def get_widgets(notebook):
+    try:
+        return notebook.metadata.widgets[WIDGET_STATE_MIMETYPE]
+    except AttributeError:
+        # Don't catch KeyError, as it's a bug if 'widgets' does
+        # not contain 'WIDGET_STATE_MIMETYPE'
+        return None
+
+
+def contains_widgets(notebook):
+    widgets = get_widgets(notebook)
+    return widgets and widgets['state']
+
+
 def extract_widget_state(executor):
     """Extract ipywidget state from a running ExecutePreprocessor"""
     # Can only run this function inside 'setup_preprocessor'
@@ -412,19 +426,6 @@ class ExecuteJupyterCells(SphinxTransform):
                 self.config.jupyter_execute_kwargs,
             )
 
-            if 'widgets' in notebook.metadata:
-                widget_state = notebook.metadata.widgets[WIDGET_STATE_MIMETYPE]
-                # Append widget state JSON if any widgets were used in the notebook.
-                # XXX: Can we specify a javascript node directly, rather than a 'raw'
-                #      node of 'html' format?
-                doctree.append(docutils.nodes.raw(
-                    text=''.join((
-                        '<script type="{}">'.format(WIDGET_STATE_MIMETYPE),
-                        json.dumps(widget_state),
-                        '</script>')),
-                    format='html'
-                ))
-
             # Modifies 'notebook' in-place, adding metadata specifying the
             # filenames of the saved outputs.
             write_notebook_output(notebook, output_dir, file_name)
@@ -437,6 +438,22 @@ class ExecuteJupyterCells(SphinxTransform):
                     sphinx_abs_dir(self.env)
                 )
                 attach_outputs(output_nodes, node)
+
+            if contains_widgets(notebook):
+                # Write the widget state to a separate file (it may be large)
+                filename = os.path.join(output_dir,
+                                        notebook_name + '_widget-state.json')
+                with open(filename, 'w') as f:
+                    f.write(json.dumps(get_widgets(notebook)))
+                # Append widget state JSON to document (if it exists)
+                # XXX: Can we specify a javascript node directly, rather than
+                # a 'raw' node of 'html' format?
+                doctree.append(docutils.nodes.raw(
+                    text='<script type="{}" src="{}"></script>'
+                         .format(WIDGET_STATE_MIMETYPE, filename),
+                    format='html',
+                ))
+
 
 
 def setup(app):
