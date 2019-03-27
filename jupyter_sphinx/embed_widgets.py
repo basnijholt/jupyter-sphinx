@@ -56,15 +56,12 @@ from docutils.parsers.rst.directives import flag, unchanged
 from sphinx.locale import _
 
 from ipywidgets import Widget
-has_embed = False
-
-try:
-    import ipywidgets.embed
-    has_embed = True
-except ImportError:
-    pass
+import ipywidgets.embed
 
 logger = logging.getLogger(__name__)
+
+REQUIRE_URL_DEFAULT = 'https://cdnjs.cloudflare.com/ajax/libs/require.js/2.3.4/require.min.js'
+
 
 def exec_then_eval(code, namespace=None):
     """Exec a code block & return evaluation of the last line"""
@@ -261,42 +258,32 @@ def add_widget_state(app, pagename, templatename, context, doctree):
         context['body'] += '<script type="application/vnd.jupyter.widget-state+json">' + state_spec + '</script>'
 
 def builder_inited(app):
+    """
+    2 cases
+    case 1: ipywidgets 7, with require
+    case 2: ipywidgets 7, no require
+    """
     require_url = app.config.jupyter_sphinx_require_url
-    # 3 cases
-    # case 1: ipywidgets 6, only embed url
-    # case 2: ipywidgets 7, with require
-    # case 3: ipywidgets 7, no require
-    # (ipywidgets6 with require is not supported, require_url is ignored)
-    if has_embed:
-        if require_url:
-            app.add_javascript(require_url)
+    if require_url:
+        app.add_javascript(require_url)
+        embed_url = app.config.jupyter_sphinx_embed_url or ipywidgets.embed.DEFAULT_EMBED_REQUIREJS_URL
     else:
-        if require_url:
-            logger.warning('Assuming ipywidgets6, ignoring jupyter_sphinx_require_url parameter')
-
-    if has_embed:
-        if require_url:
-            embed_url = app.config.jupyter_sphinx_embed_url or ipywidgets.embed.DEFAULT_EMBED_REQUIREJS_URL
-        else:
-            embed_url = app.config.jupyter_sphinx_embed_url or ipywidgets.embed.DEFAULT_EMBED_SCRIPT_URL
-    else:
-        embed_url = app.config.jupyter_sphinx_embed_url or 'https://unpkg.com/jupyter-js-widgets@^2.0.13/dist/embed.js'
+        embed_url = app.config.jupyter_sphinx_embed_url or ipywidgets.embed.DEFAULT_EMBED_SCRIPT_URL
     if embed_url:
         app.add_javascript(embed_url)
 
 def setup(app):
     """
-    case 1: ipywidgets 6, only embed url
-    case 2: ipywidgets 7, with require
-    case 3: ipywidgets 7, no require
+    2 cases
+    case 1: ipywidgets 7, with require
+    case 2: ipywidgets 7, no require
     """
     setup.app = app
     setup.config = app.config
     setup.confdir = app.confdir
 
     app.add_stylesheet('https://unpkg.com/font-awesome@4.5.0/css/font-awesome.min.css')
-    require_url_default = 'https://cdnjs.cloudflare.com/ajax/libs/require.js/2.3.4/require.min.js'
-    app.add_config_value('jupyter_sphinx_require_url', require_url_default, 'html')
+    app.add_config_value('jupyter_sphinx_require_url', REQUIRE_URL_DEFAULT, 'html')
     app.add_config_value('jupyter_sphinx_embed_url', None, 'html')
 
     app.add_node(widget,

@@ -26,15 +26,11 @@ from jupyter_client.kernelspec import get_kernel_spec, NoSuchKernel
 import nbformat
 
 from ipywidgets import Widget
+import ipywidgets.embed
 
 from ._version import __version__
+from .embed_widgets import REQUIRE_URL_DEFAULT, builder_inited
 
-
-try:
-    import ipywidgets.embed
-    has_embed = True
-except ImportError:
-    has_embed = False
 
 logger = logging.getLogger(__name__)
 
@@ -189,9 +185,8 @@ class JupyterWidgetViewNode(docutils.nodes.Element):
         super().__init__('', view_spec=view_spec)
 
     def html(self):
-        return ('<script type={}>{}</script>'
-                .format(WIDGET_VIEW_MIMETYPE,
-                        json.dumps(self['view_spec'])))
+        return ipywidgets.embed.widget_view_template.format(
+            view_spec=json.dumps(self['view_spec']))
 
     def text(self):
         return '[ widget ]'
@@ -215,9 +210,8 @@ class JupyterWidgetStateNode(docutils.nodes.Element):
         # TODO: render into a separate file if 'html-manager' starts fully
         #       parsing script tags, and not just grabbing their innerHTML
         # https://github.com/jupyter-widgets/ipywidgets/blob/master/packages/html-manager/src/libembed.ts#L36
-        return ('<script type={}>{}</script>'
-                .format(WIDGET_STATE_MIMETYPE,
-                        json.dumps(self['state'])))
+        return ipywidgets.embed.snippet_template.format(
+            load='', json_data=json.dumps(self['state']), widget_views='')
 
 
 ### Doctree transformations
@@ -565,31 +559,6 @@ def sphinx_abs_dir(env):
     )
 
 
-def builder_inited(app):
-    require_url = app.config.jupyter_sphinx_require_url
-    # 3 cases
-    # case 1: ipywidgets 6, only embed url
-    # case 2: ipywidgets 7, with require
-    # case 3: ipywidgets 7, no require
-    # (ipywidgets6 with require is not supported, require_url is ignored)
-    if has_embed:
-        if require_url:
-            app.add_javascript(require_url)
-    else:
-        if require_url:
-            logger.warning('Assuming ipywidgets6, ignoring jupyter_sphinx_require_url parameter')
-
-    if has_embed:
-        if require_url:
-            embed_url = app.config.jupyter_sphinx_embed_url or ipywidgets.embed.DEFAULT_EMBED_REQUIREJS_URL
-        else:
-            embed_url = app.config.jupyter_sphinx_embed_url or ipywidgets.embed.DEFAULT_EMBED_SCRIPT_URL
-    else:
-        embed_url = app.config.jupyter_sphinx_embed_url or 'https://unpkg.com/jupyter-js-widgets@^2.0.13/dist/embed.js'
-    if embed_url:
-        app.add_javascript(embed_url)
-
-
 def setup(app):
     # Configuration
     app.add_config_value(
@@ -617,8 +586,7 @@ def setup(app):
     )
 
     # ipywidgets config
-    require_url_default = 'https://cdnjs.cloudflare.com/ajax/libs/require.js/2.3.4/require.min.js'
-    app.add_config_value('jupyter_sphinx_require_url', require_url_default, 'html')
+    app.add_config_value('jupyter_sphinx_require_url', REQUIRE_URL_DEFAULT, 'html')
     app.add_config_value('jupyter_sphinx_embed_url', None, 'html')
 
     # JupyterKernelNode is just a doctree marker for the
